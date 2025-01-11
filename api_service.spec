@@ -1,10 +1,4 @@
-# build_service.py
-import PyInstaller.__main__
-import os
-import sys
-
-# Create the spec file content
-spec_content = """# -*- mode: python ; coding: utf-8 -*-
+# -*- mode: python ; coding: utf-8 -*-
 
 block_cipher = None
 
@@ -69,15 +63,3 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
 )
-"""
-
-# Write spec file
-with open('api_service.spec', 'w') as f:
-    f.write(spec_content)
-
-# Run PyInstaller
-if __name__ == "__main__":
-    PyInstaller.__main__.run([
-        'api_service.spec',
-        '--clean'
-    ])

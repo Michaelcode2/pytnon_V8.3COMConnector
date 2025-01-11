@@ -1,1 +1,15 @@
 .history
+
+.gitignore
+
+.venv
+
+.env
+
+.vscode
+
+#Python
+__pycache__
+
+build
+dist

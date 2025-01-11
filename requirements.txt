@@ -1,0 +1,5 @@
+Flask==3.0.2
+pywin32==306
+waitress==3.0.0
+comtypes==1.2.0
+pyinstaller==6.5.0 

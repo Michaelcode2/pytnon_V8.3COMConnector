@@ -1,4 +1,3 @@
-
 # Windows Service Product API with 1C COM Integration
 
 This project implements a Windows service that exposes a REST API for product information retrieval from 1C database using COM connector. The service handles EAN13 barcode requests and returns product information in JSON format.
@@ -6,11 +5,13 @@ This project implements a Windows service that exposes a REST API for product in
 ## Features
 
 - Windows service implementation using Python
-- REST API endpoint for product information retrieval
+- REST API endpoints for product price checking
 - EAN13 barcode validation
 - 1C COM connector integration
 - Daily log rotation with 10-day retention
 - Health check endpoint
+- Configurable connection settings
+- Debug mode for development
 - Conversion to standalone .exe file
 
 ## Prerequisites
@@ -18,6 +19,7 @@ This project implements a Windows service that exposes a REST API for product in
 - Windows OS
 - Python 3.7+
 - Administrative privileges
+- 1C:Enterprise platform with COM connector
 - Registered 1C COM connector (`regsvr32 comcntr.dll`)
 
 ## Installation
@@ -33,7 +35,17 @@ cd product-api-service
 pip install pywin32 flask waitress pyinstaller
 ```
 
-3. Make sure 1C COM connector is properly registered:
+3. Create the following directory structure:
+
+   PriceChecker/
+   ├── settings/
+   │   ├── connection.cfg    # 1C connection string
+   │   └── query_price.sql   # SQL query for price lookup
+   ├── service.py
+   └── build_service.py
+
+
+4. Make sure 1C COM connector is properly registered:
 ```bash
 # Run as Administrator
 regsvr32 comcntr.dll
@@ -54,23 +66,48 @@ Run these commands in an elevated (Administrator) command prompt:
 
 ```bash
 # Install the service
-APIService.exe install
+PriceCheckerService.exe install
 
 # Start the service
-APIService.exe start
+PriceCheckerService.exe start
 
 # Stop the service
-APIService.exe stop
+PriceCheckerService.exe stop
 
 # Remove the service
-APIService.exe remove
+PriceCheckerService.exe remove
+```
+
+
+## Configuration
+
+
+### Connection String (settings/connection.cfg)
+```
+File="path_to_your_1C_database";Usr="username";Pwd="password";
+```
+
+### SQL Query (settings/query_price.sql)
+
+```sql
+ВЫБРАТЬ
+	Штрихкоды.Штрихкод КАК Штрихкод,
+	ЦеныНоменклатурыСрезПоследних.Цена КАК Цена,
+	Штрихкоды.ЕдиницаИзмерения.Наименование КАК ЕдиницаИзмерения,
+	Штрихкоды.Владелец.НаименованиеПолное КАК Номенклатура
+ИЗ
+	РегистрСведений.Штрихкоды КАК Штрихкоды
+		ЛЕВОЕ СОЕДИНЕНИЕ РегистрСведений.ЦеныНоменклатуры.СрезПоследних КАК ЦеныНоменклатурыСрезПоследних
+		ПО Штрихкоды.Владелец = ЦеныНоменклатурыСрезПоследних.Номенклатура
+ГДЕ
+	Штрихкоды.Штрихкод = &barcode
 ```
 
 ## API Endpoints
 
 ### Product Information
 ```
-GET /products/ean13/{barcode}
+GET /products/{barcode}
 ```
 Returns product information for a valid EAN13 barcode.
 
@@ -98,22 +135,40 @@ Example response:
 }
 ```
 
-## Configuration
 
-The service uses the following default settings:
-- Port: 8880
-- Logs directory: `C:\ServiceLogs`
-- Log rotation: Daily
-- Log retention: 10 days
-- 1C database path: `C:\common\DB\83Empty8310`
+## Development
+
+1. Set `DEBUG_MODE = True` in service.py
+
+2. Run directly with Python:
+   ```bash
+   python service.py
+   ```
+
+
+## Service Management
+
+- Install: `PriceCheckerService.exe install`
+
+- Start: `PriceCheckerService.exe start`
+
+- Stop: `PriceCheckerService.exe stop`
+
+- Remove: `PriceCheckerService.exe remove`  
+
+- Status: `PriceCheckerService.exe status`
 
 ## Logging
 
-Logs are stored in `C:\ServiceLogs` with the following features:
+Logs are stored in the `logs` directory next to the executable:
+
+- Main log file: `logs/api_service.log`
+
 - Daily rotation at midnight
+
 - Automatic cleanup of logs older than 10 days
+
 - Format: `api_service.log.YYYY-MM-DD`
-- Current log: `api_service.log`
 
 ## Error Handling
 
@@ -122,15 +177,6 @@ The service includes comprehensive error handling for:
 - COM connector issues
 - Service initialization problems
 - Database connection errors
-
-## Development
-
-To modify the service:
-
-1. Update the COM connector query in `ProductService.get_product_by_scan_code()`
-2. Modify log settings in `setup_logging()`
-3. Add new API endpoints in the Flask application
-4. Rebuild the executable using `build_service.py`
 
 ## Security Notes
 
@@ -152,13 +198,27 @@ To modify the service:
    - Verify Python dependencies
 
 3. Log Access Issues:
-   - Ensure `C:\ServiceLogs` directory exists
+
+   - Ensure `logs` directory exists
    - Check permissions on logs directory
    - Verify service account permissions
 
-## License
 
-[Your chosen license]
+## Notes
+
+- Configuration files can be modified without rebuilding by placing them in the `settings` folder next to the executable
+
+- Debug mode provides additional logging and direct console output
+
+- Service runs on port 8880 by default
+
+- Logs are stored in the `logs` directory next to the executable
+
+- Daily rotation at midnight
+
+- Automatic cleanup of logs older than 10 days
+
+- Format: `api_service.log.YYYY-MM-DD`
 
 ## Contributing
 

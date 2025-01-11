@@ -13,12 +13,35 @@ from waitress import serve
 import threading
 from win32com.client.dynamic import Dispatch
 import re
+import pythoncom
 
 app = Flask(__name__)
 
 # Configure logging with rotation
-LOG_DIR = 'C:\\ServiceLogs'
+def get_log_dir():
+    if getattr(sys, 'frozen', False):
+        base_path = os.path.dirname(sys.executable)
+    else:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_path, 'logs')
+
+LOG_DIR = get_log_dir()
 LOG_FILE = os.path.join(LOG_DIR, 'api_service.log')
+
+DEBUG_MODE = False  # Set to False when building for production
+
+def get_settings_path():
+    if getattr(sys, 'frozen', False):
+        # First try to find settings next to the executable
+        exe_dir = os.path.dirname(sys.executable)
+        exe_settings = os.path.join(exe_dir, 'settings')
+        if os.path.exists(exe_settings):
+            return exe_settings
+        # Fall back to bundled settings
+        return os.path.join(sys._MEIPASS, 'settings')
+    else:
+        # Development mode
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), 'settings')
 
 def setup_logging():
     # Create logs directory if it doesn't exist
@@ -64,11 +87,26 @@ class ProductService:
     def __init__(self):
         self.v8_connector = None
         self.app = None
+        pythoncom.CoInitialize()
         self.initialize_connector()
+
+    def __del__(self):
+        try:
+            pythoncom.CoUninitialize()  # Cleanup COM
+        except:
+            pass
 
     def initialize_connector(self):
         try:
-            connection_string = r'File="C:\common\DB\83Empty8310";'
+            # Read connection string from config
+            config_path = os.path.join(get_settings_path(), 'connection.cfg')
+            with open(config_path, 'r', encoding='utf-8') as f:
+                connection_string = f.read().strip()
+            
+            # Add debug logging
+            logging.info(f"Using connection string from: {config_path}")
+            logging.info(f"Connection string: {connection_string}")
+            
             self.v8_connector = Dispatch('V83.COMConnector')
             self.app = self.v8_connector.Connect(connection_string)
             logging.info("COM connector initialized successfully")
@@ -78,24 +116,31 @@ class ProductService:
 
     def get_product_by_scan_code(self, scan_code):
         try:
-            # TODO: Replace this with actual COM connector query
-            # This is a placeholder that will be updated with actual COM integration
-            # Example: product_data = self.app.GetProductByScanCode(scan_code)
+            # Updated query filename
+            query_text = QueryHandler.load_query('query_price.sql')
             
-            # Placeholder response
-            product_data = {
-                "name": "Product Name",
-                "measurement": "pcs",
-                "price": 10.99,
-                "discountPrice": 8.99
-            }
-            return product_data
+            # Execute query
+            query = self.app.NewObject("Query")
+            query.Text = query_text
+            query.SetParameter("barcode", scan_code)
+            result = query.Execute()
+            selection = result.Choose()
+            
+            if selection.Next():
+                # Format response maintaining existing contract
+                return {
+                    "name": str(selection.Номенклатура if selection.Номенклатура else ""),
+                    "measurement": str(selection.ЕдиницаИзмерения if selection.ЕдиницаИзмерения else "шт"),
+                    "price": float(selection.Цена or 0),
+                    "discountPrice": None
+                }
+                
+            logging.warning(f"No product found for barcode {scan_code}")
+            return None
+            
         except Exception as e:
             logging.error(f"Error fetching product data: {str(e)}")
             raise
-
-# Create global product service instance
-product_service = None
 
 def is_valid_ean13(barcode):
     """
@@ -127,26 +172,29 @@ def health_check():
 @app.route('/products/<scan_code>')
 def get_product(scan_code):
     try:
+        logging.info(f"Received request for scan_code: {scan_code}")
         if not product_service:
+            logging.error("Service not initialized")
             return {'error': 'Service not initialized'}, 503
         
         # Validate EAN13 format
-        if not is_valid_ean13(barcode):
-            logging.warning(f"Invalid EAN13 barcode format: {barcode}")
+        if not is_valid_ean13(scan_code):
+            logging.warning(f"Invalid EAN13 barcode format: {scan_code}")
             return {
                 'error': 'Invalid barcode format',
                 'details': 'Barcode must be a valid EAN13 format (13 digits with valid checksum)'
             }, 400
 
         product_data = product_service.get_product_by_scan_code(scan_code)
+        logging.info(f"Product data retrieved for {scan_code}: {product_data}")
         return jsonify(product_data)
     except Exception as e:
         logging.error(f"Error processing request for scan_code {scan_code}: {str(e)}")
         return {'error': 'Failed to fetch product data'}, 500
 
 class APIService(win32serviceutil.ServiceFramework):
-    _svc_name_ = "ProductAPIService"
-    _svc_display_name_ = "Product API Service"
+    _svc_name_ = "PriceCheckerService"
+    _svc_display_name_ = "PriceChecker Service"
     _svc_description_ = "Windows Service running a Product API with COM Connector"
 
     def __init__(self, args):
@@ -203,10 +251,37 @@ class APIService(win32serviceutil.ServiceFramework):
             logging.error(f"Service error: {str(e)}")
             servicemanager.LogErrorMsg(f"Service error: {str(e)}")
 
+class QueryHandler:
+    @staticmethod
+    def load_query(filename):
+        query_path = os.path.join(get_settings_path(), filename)
+        with open(query_path, 'r', encoding='utf-8') as f:
+            return f.read()
+
 if __name__ == '__main__':
-    if len(sys.argv) == 1:
-        servicemanager.Initialize()
-        servicemanager.PrepareToHostSingle(APIService)
-        servicemanager.StartServiceCtrlDispatcher()
+    if DEBUG_MODE:
+        try:
+            # Initialize logging
+            setup_logging()
+            logging.info("Starting in DEBUG mode")
+            
+            product_service = ProductService()
+            
+            # Run Flask app directly in debug mode
+            app.run(host='0.0.0.0', port=8880, debug=True)
+            
+        except Exception as e:
+            logging.error(f"Debug mode error: {str(e)}")
+            sys.exit(1)
     else:
-        win32serviceutil.HandleCommandLine(APIService)
+        # Normal service mode
+        if len(sys.argv) == 1:
+            try:
+                servicemanager.Initialize()
+                servicemanager.PrepareToHostSingle(APIService)
+                servicemanager.StartServiceCtrlDispatcher()
+            except Exception as e:
+                logging.error(f"Service failed to start: {str(e)}")
+                sys.exit(1)
+        else:
+            win32serviceutil.HandleCommandLine(APIService)
