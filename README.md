@@ -37,13 +37,14 @@ pip install pywin32 flask waitress pyinstaller
 
 3. Create the following directory structure:
 
+```
    PriceChecker/
    ├── settings/
    │   ├── connection.cfg    # 1C connection string
    │   └── query_price.sql   # SQL query for price lookup
    ├── service.py
    └── build_service.py
-
+```
 
 4. Make sure 1C COM connector is properly registered:
 ```bash
