@@ -8,14 +8,20 @@ import logging
 from logging.handlers import TimedRotatingFileHandler
 import os
 from datetime import datetime, timedelta
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from waitress import serve
 import threading
 from win32com.client.dynamic import Dispatch
 import re
 import pythoncom
+import gc
+from functools import wraps
+from configparser import ConfigParser
+from pathlib import Path
 
 app = Flask(__name__)
+
+DEBUG_MODE = False  # Set to False when building for production
 
 # Configure logging with rotation
 def get_log_dir():
@@ -27,21 +33,6 @@ def get_log_dir():
 
 LOG_DIR = get_log_dir()
 LOG_FILE = os.path.join(LOG_DIR, 'api_service.log')
-
-DEBUG_MODE = False  # Set to False when building for production
-
-def get_settings_path():
-    if getattr(sys, 'frozen', False):
-        # First try to find settings next to the executable
-        exe_dir = os.path.dirname(sys.executable)
-        exe_settings = os.path.join(exe_dir, 'settings')
-        if os.path.exists(exe_settings):
-            return exe_settings
-        # Fall back to bundled settings
-        return os.path.join(sys._MEIPASS, 'settings')
-    else:
-        # Development mode
-        return os.path.join(os.path.dirname(os.path.abspath(__file__)), 'settings')
 
 def setup_logging():
     # Create logs directory if it doesn't exist
@@ -83,6 +74,29 @@ def cleanup_old_logs():
     except Exception as e:
         logging.error(f"Error cleaning up logs: {str(e)}")
 
+def get_settings_path():
+    if getattr(sys, 'frozen', False):
+        # First try to find settings next to the executable
+        exe_dir = os.path.dirname(sys.executable)
+        exe_settings = os.path.join(exe_dir, 'settings')
+        if os.path.exists(exe_settings):
+            return exe_settings
+        # Fall back to bundled settings
+        return os.path.join(sys._MEIPASS, 'settings')
+    else:
+        # Development mode
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), 'settings')
+
+def get_config(section, key):
+    config = ConfigParser()
+    config_path = os.path.join(get_settings_path(), 'settings.cfg')
+    config.read(config_path)
+    return config.get(section, key)
+
+# Cache the configs at startup
+API_KEY = get_config('API', 'key')
+CONNECTION_STRING = get_config('Database', 'connection_string')
+
 class ProductService:
     def __init__(self):
         self.v8_connector = None
@@ -98,14 +112,9 @@ class ProductService:
 
     def initialize_connector(self):
         try:
-            # Read connection string from config
-            config_path = os.path.join(get_settings_path(), 'connection.cfg')
-            with open(config_path, 'r', encoding='utf-8') as f:
-                connection_string = f.read().strip()
-            
-            # Add debug logging
-            logging.info(f"Using connection string from: {config_path}")
-            logging.info(f"Connection string: {connection_string}")
+            pythoncom.CoInitialize()
+            connection_string = CONNECTION_STRING
+            #logging.info(f"Connection string: {connection_string}")
             
             self.v8_connector = Dispatch('V83.COMConnector')
             self.app = self.v8_connector.Connect(connection_string)
@@ -158,6 +167,20 @@ def is_valid_ean13(barcode):
     check_digit = (10 - (total % 10)) % 10
     return check_digit == int(barcode[-1])
 
+
+def require_api_key(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        api_key = request.headers.get('x-api-key')
+        if not api_key:
+            logging.warning(f"API key missing - IP: {request.remote_addr}")
+            return jsonify({"error": "No API key provided"}), 403
+        if api_key != API_KEY:
+            logging.warning(f"Invalid API key: {api_key} from IP: {request.remote_addr}")
+            return jsonify({"error": "Invalid API key"}), 403
+        return f(*args, **kwargs)
+    return decorated_function
+
 @app.route('/api/health')
 def health_check():
     try:
@@ -170,6 +193,7 @@ def health_check():
         return {'status': 'unhealthy', 'error': str(e)}, 500
 
 @app.route('/products/<scan_code>')
+@require_api_key
 def get_product(scan_code):
     try:
         logging.info(f"Received request for scan_code: {scan_code}")
