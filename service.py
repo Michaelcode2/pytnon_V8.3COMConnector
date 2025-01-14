@@ -96,6 +96,7 @@ def get_config(section, key):
 # Cache the configs at startup
 API_KEY = get_config('API', 'key')
 CONNECTION_STRING = get_config('Database', 'connection_string')
+STORE_CODE = get_config('QueryParams', 'storecode')
 
 class ProductService:
     def __init__(self):
@@ -119,6 +120,7 @@ class ProductService:
             self.v8_connector = Dispatch('V83.COMConnector')
             self.app = self.v8_connector.Connect(connection_string)
             logging.info("COM connector initialized successfully")
+            logging.info(f"Prices configured for Store: {STORE_CODE}")
         except Exception as e:
             logging.error(f"Failed to initialize COM connector: {str(e)}")
             raise
@@ -132,6 +134,7 @@ class ProductService:
             query = self.app.NewObject("Query")
             query.Text = query_text
             query.SetParameter("barcode", scan_code)
+            query.SetParameter("storecode", STORE_CODE)
             result = query.Execute()
             selection = result.Choose()
             
